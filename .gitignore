@@ -1,0 +1,26 @@
+# Secrets - never committed
+.env
+.env.*
+!.env.example
+firmware/include/secrets.h
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+dist/
+
+# PlatformIO
+.pio/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
