@@ -9,6 +9,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && useradd --create-home --uid 10001 app
 
+FROM base AS test
+
+COPY requirements-dev.txt .
+RUN pip install --no-cache-dir -r requirements-dev.txt
+COPY app ./app
+COPY tests ./tests
+CMD ["python", "-m", "pytest", "-q"]
+
 FROM base AS runtime
 
 COPY app ./app
