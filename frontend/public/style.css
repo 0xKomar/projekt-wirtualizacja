@@ -9,3 +9,11 @@ pre {
   background: #f4f4f4;
   padding: 1rem;
 }
+
+.ok {
+  color: green;
+}
+
+.error {
+  color: crimson;
+}
