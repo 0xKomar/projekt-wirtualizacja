@@ -45,10 +45,31 @@ firmware/    ESP32 sensor code
 simulator/   virtual sensors for testing and demos
 ```
 
-## Running
+## How to run
 
-Instructions will be added together with `docker-compose.yml`.
-Configuration lives in environment variables: copy `.env.example` to `.env` and fill in the passwords.
+You need Docker with Docker Compose.
+
+```sh
+git clone https://github.com/0xKomar/projekt-wirtualizacja.git
+cd projekt-wirtualizacja
+cp .env.example .env    # then set POSTGRES_PASSWORD
+docker compose up --build
+```
+
+Compose starts three containers: `db`, `backend` and `frontend`. The backend waits until the database is healthy.
+
+- Web page: http://localhost:8080
+- Backend health check: http://localhost:8000/api/health (published on localhost only)
+- The database has no port on the host, only the backend can reach it.
+
+Configuration lives in `.env`, which git ignores, so passwords never reach the repository.
+If port 8080 is already in use, change `FRONTEND_PORT` in `.env`.
+If you change `BACKEND_PORT`, change the port in `BACKEND_URL` too.
+
+Stop everything with `docker compose down`. The database stays in the `postgres_data` volume.
+`docker compose down -v` deletes it, which is also needed after changing the database password.
+
+More details: [backend/README.md](backend/README.md), [frontend/README.md](frontend/README.md).
 
 ## Team
 
