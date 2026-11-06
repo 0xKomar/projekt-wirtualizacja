@@ -46,6 +46,22 @@ def create_app(*, engine: Engine | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         return HealthResponse(status="ok", database="ok")
 
+    @application.get("/api/devices", status_code=501)
+    def list_devices() -> Response:
+        return Response(status_code=501)
+
+    @application.get("/api/devices/{device_id}", status_code=501)
+    def get_device(device_id: str) -> Response:
+        return Response(status_code=501)
+
+    @application.post("/api/devices", status_code=501)
+    def create_device() -> Response:
+        return Response(status_code=501)
+
+    @application.put("/api/devices/{device_id}", status_code=501)
+    def update_device(device_id: str) -> Response:
+        return Response(status_code=501)
+
     return application
 
 
