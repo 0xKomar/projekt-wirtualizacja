@@ -4,6 +4,8 @@ server {
     location / {
         root /usr/share/nginx/html;
         index index.html;
+        # Always ask the server, so a new version shows up without Ctrl+F5.
+        add_header Cache-Control "no-cache";
     }
 
     # Docker's DNS, so nginx starts even before the backend is up.
