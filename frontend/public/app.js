@@ -16,6 +16,8 @@ async function checkHealth() {
     status.className = "error";
     response.textContent = "";
   }
+
+  document.getElementById("checked").textContent = `Last check: ${new Date().toLocaleTimeString()}`;
 }
 
 checkHealth();
