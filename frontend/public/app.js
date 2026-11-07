@@ -4,13 +4,14 @@ async function checkHealth() {
   const response = document.getElementById("response");
 
   try {
-    const res = await fetch("/api/health");
+    // Give up after 5 s, so a dead backend shows up quickly.
+    const res = await fetch("/api/health", { cache: "no-store", signal: AbortSignal.timeout(5000) });
     const data = await res.json();
     status.textContent = `Backend: ${data.status}, database: ${data.database}`;
     status.className = res.ok ? "ok" : "error";
     response.textContent = JSON.stringify(data, null, 2);
   } catch {
-    // No JSON at all: nginx couldn't reach the backend.
+    // Timeout or no JSON at all: nginx couldn't reach the backend.
     status.textContent = "Backend unreachable";
     status.className = "error";
     response.textContent = "";
