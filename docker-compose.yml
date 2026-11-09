@@ -31,6 +31,7 @@ services:
       DB_HOST: ${DB_HOST:?Set DB_HOST in .env}
       DB_PORT: ${DB_PORT:?Set DB_PORT in .env}
       BACKEND_PORT: ${BACKEND_PORT:?Set BACKEND_PORT in .env}
+      DEVICE_OFFLINE_AFTER_SECONDS: ${DEVICE_OFFLINE_AFTER_SECONDS:-60}
     ports:
       - "127.0.0.1:${BACKEND_PORT:?Set BACKEND_PORT in .env}:${BACKEND_PORT:?Set BACKEND_PORT in .env}"
     depends_on:
@@ -41,7 +42,7 @@ services:
         - CMD
         - python
         - -c
-        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['BACKEND_PORT'] + '/api/health', timeout=8).close()"
+        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['BACKEND_PORT'] + '/health', timeout=8).close()"
       interval: 5s
       timeout: 10s
       retries: 3

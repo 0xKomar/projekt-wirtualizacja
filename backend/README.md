@@ -17,8 +17,8 @@ curl -i http://localhost:8000/api/health
 The backend's development port is published on loopback only. The database has no
 host port. Swagger UI is available at `http://localhost:8000/docs`.
 
-The stack currently contains `db` and `backend`. The frontend will add its own
-service, reverse proxy and published port to the `frontend` network.
+The stack contains `db`, `backend` and `frontend`. The frontend joins only the
+`frontend` network; the API joins both networks so it can reach PostgreSQL.
 
 Stop the stack with `docker compose down`. Database files remain in the named
 `postgres_data` volume. Existing PostgreSQL volumes retain their original
@@ -37,6 +37,7 @@ The application does not load a local `.env` file itself.
 | `DB_HOST` | Database hostname inside Compose; normally `db` |
 | `DB_PORT` | PostgreSQL listening port; normally `5432` |
 | `BACKEND_PORT` | API listening and loopback host port; normally `8000` |
+| `DEVICE_OFFLINE_AFTER_SECONDS` | Provisional offline threshold; defaults to `60` seconds until ESP trials |
 
 If `BACKEND_PORT` changes, update the port in `BACKEND_URL` for the frontend too.
 Database connection and statement timeouts are three seconds. The connection
@@ -45,8 +46,8 @@ restart without restarting the API.
 
 ## Health contract
 
-`GET /api/health` does not require authentication. Responses have
-`Cache-Control: no-store`.
+`GET /api/health` and its `/health` alias do not require authentication. Both
+responses have `Cache-Control: no-store`.
 
 | HTTP status | JSON body |
 | --- | --- |
@@ -57,13 +58,86 @@ A database connection or query failure returns 503 without exposing connection
 details. The application creates its connection pool without connecting during
 startup; Compose waits for a healthy database before starting the backend.
 
+## Device API contract (B1.1)
+
+The B1.1 endpoints provide the agreed request/response contract using temporary
+in-memory state. Locations, devices, keys and readings are lost when the backend
+restarts; this stage does not persist them in PostgreSQL. B1.2 will replace the
+stub storage with database-backed models.
+
+### Locations and devices
+
+`POST /api/locations` accepts:
+
+```json
+{"name": "Stary Rynek", "lat": 52.4083, "lon": 16.9335}
+```
+
+It returns `201` with an assigned `id` and those location fields. Latitude must
+be between -90 and 90; longitude between -180 and 180.
+
+`POST /api/devices` accepts `{"name": "Stary Rynek", "location_id": 1}` and
+returns `201` with `id`, `name`, `location_id` and a cryptographically random
+`key`. For example:
+
+```json
+{"id": 1, "name": "Stary Rynek", "location_id": 1, "key": "<returned-once>"}
+```
+
+The key is returned only in this creation response; the stub keeps only its
+SHA-256 hash in process memory. `location_id` must refer to a location created in
+the current process.
+
+### Readings
+
+`POST /api/readings` requires the `X-Device-Key` header and accepts:
+
+```json
+{"measured_at": "2026-01-01T12:00:00Z", "db_avg": 54.2, "db_min": 48.1, "db_max": 71.9}
+```
+
+`measured_at` is optional; when omitted, the backend uses receipt time. Supplied
+timestamps must include an ISO 8601 UTC offset and are normalized to UTC. Past
+times are allowed; times more than five minutes in the future are rejected. A
+successful request returns `201` with the same four reading fields, including the
+normalized `measured_at`. Each level must be in the inclusive 0–150 range and
+satisfy `db_min <= db_avg <= db_max`. These are uncalibrated readings, not
+calibrated dB SPL values.
+
+### Device listing
+
+`GET /api/devices` returns a list; `GET /api/devices/{id}` returns one device or
+404. Each item has this shape:
+
+```json
+{
+  "id": 1,
+  "name": "Stary Rynek",
+  "location": {"id": 1, "name": "Stary Rynek", "lat": 52.4083, "lon": 16.9335},
+  "online": true,
+  "last_seen_at": "2026-01-01T12:00:00Z",
+  "last_reading": {"measured_at": "2026-01-01T12:00:00Z", "db_avg": 54.2, "db_min": 48.1, "db_max": 71.9}
+}
+```
+
+Before the first reading, `online` is false and `last_seen_at` and
+`last_reading` are null. `last_seen_at` records receipt time, not the sensor's
+`measured_at`. `DEVICE_OFFLINE_AFTER_SECONDS` controls the online threshold; its
+initial value is 60 seconds for testing only and will be reviewed after ESP
+trials.
+
+Invalid request data returns `400 {"detail":"Invalid request data"}`. Missing or
+invalid device keys return `401 {"detail":"Invalid or missing device key"}`;
+missing locations and devices return `404` with a `detail` string.
+
 ## Networks
 
-- `frontend`: the API and, when added, the frontend service.
+- `frontend`: the API and frontend service.
 - `backend`: the API and PostgreSQL.
 
-The frontend service should join only `frontend`, so it has no direct connection
-to the database network. The API joins both networks.
+The frontend service joins only `frontend`, so it has no direct connection to the
+database network. The API joins both networks.
+
 
 ## Tests
 
