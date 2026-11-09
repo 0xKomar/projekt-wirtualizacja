@@ -4,14 +4,19 @@ server {
     location / {
         root /usr/share/nginx/html;
         index index.html;
+        # Always ask the server, so a new version shows up without Ctrl+F5.
+        add_header Cache-Control "no-cache";
     }
 
     # Docker's DNS, so nginx starts even before the backend is up.
     resolver 127.0.0.11 valid=10s;
+    # Fail fast when the backend is down instead of hanging for 30-60 s.
+    resolver_timeout 2s;
 
     # Everything under /api/ goes to the backend container.
     location /api/ {
         set $backend ${BACKEND_URL};
         proxy_pass $backend;
+        proxy_connect_timeout 2s;
     }
 }
