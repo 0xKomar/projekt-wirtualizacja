@@ -3,6 +3,7 @@ import os
 import signal
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 
@@ -50,19 +51,42 @@ def register(devices):
         print(f"Registered {name} as device {device['id']}")
 
 
+def send_readings(devices, stopped):
+    now = datetime.now().astimezone()
+    for name, lat, lon, base in SENSORS:
+        if name in stopped:
+            continue
+        reading = make_reading(base, now)
+        reading["measured_at"] = now.isoformat(timespec="seconds")
+        try:
+            post("/api/readings", reading, devices[name]["key"])
+            print(f"{now:%H:%M:%S} {name}: {reading['db_avg']} dB")
+        except urllib.error.HTTPError as error:
+            if error.code == 401:
+                # Don't register a new device, so a lost key is visible.
+                print(f"{name}: key rejected (401), sensor stopped. "
+                      f"Delete {STATE_FILE} to register again.")
+                stopped.add(name)
+            else:
+                print(f"{name}: backend answered {error.code}")
+        except OSError as error:
+            # Backend down or too slow: try again next time.
+            print(f"{name}: backend unreachable ({error})")
+
+
 def main():
     # Stop right away on "docker compose stop" (SIGTERM).
     signal.signal(signal.SIGTERM, lambda *args: sys.exit(0))
     devices = load_devices()
     register(devices)
-    print(f"Simulating {len(SENSORS)} sensors every {INTERVAL:g} s")
+    print(f"Sending {len(SENSORS)} sensors to {API_URL} every {INTERVAL:g} s")
 
-    while True:
-        now = datetime.now().astimezone()
-        for name, lat, lon, base in SENSORS:
-            reading = make_reading(base, now)
-            print(f"{now:%H:%M:%S} {name}: {reading}")
+    stopped = set()
+    while len(stopped) < len(SENSORS):
+        send_readings(devices, stopped)
         time.sleep(INTERVAL)
+    print("All sensors stopped")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
