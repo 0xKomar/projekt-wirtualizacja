@@ -6,8 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Sensors are in Poznań, so the day rhythm follows Polish time.
 ENV TZ=Europe/Warsaw
 
+# Device keys go to a volume mounted here.
+ENV SIM_STATE_FILE=/data/devices.json
+
 WORKDIR /app
-RUN useradd --create-home --uid 10001 app
+RUN useradd --create-home --uid 10001 app \
+    && mkdir /data && chown app /data
 
 COPY noise.py main.py ./
 USER app
