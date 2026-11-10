@@ -61,6 +61,19 @@ services:
     networks:
       - frontend
 
+  simulator:
+    build: ./simulator
+    # Starts only with: docker compose --profile sim up
+    profiles: ["sim"]
+    environment:
+      SIM_INTERVAL: ${SIM_INTERVAL:-10}
+    depends_on:
+      backend:
+        condition: service_healthy
+    # Talks to the backend like a real sensor, never to the database.
+    networks:
+      - frontend
+
 volumes:
   postgres_data:
 
