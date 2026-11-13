@@ -20,3 +20,7 @@ class Settings(BaseSettings):
             port=self.db_port,
             database=self.postgres_db,
         )
+
+
+class ApiSettings(BaseSettings):
+    device_offline_after_seconds: int = Field(default=60, gt=0)
