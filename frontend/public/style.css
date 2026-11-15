@@ -1,13 +1,42 @@
 body {
   font-family: system-ui, sans-serif;
-  max-width: 40rem;
-  margin: 2rem auto;
-  padding: 0 1rem;
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
-pre {
-  background: #f4f4f4;
-  padding: 1rem;
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 1.5rem;
+  padding: 0.5rem 1rem;
+}
+
+h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+#status,
+#checked {
+  margin: 0;
+}
+
+#checked {
+  color: gray;
+  font-size: 0.875rem;
+}
+
+/* The map takes the rest of the page. */
+#map {
+  flex: 1;
+}
+
+/* Gray map, so only the sensors are in color. */
+.gray-tiles {
+  filter: grayscale(1) brightness(1.08) contrast(0.85);
 }
 
 .ok {
