@@ -81,9 +81,18 @@ async function loadSensors() {
     for (const device of devices) {
       showSensor(device);
     }
+    // Remove markers of devices the backend no longer has.
+    const ids = devices.map((device) => String(device.id));
+    for (const id of Object.keys(markers)) {
+      if (!ids.includes(id)) {
+        markers[id].remove();
+        delete markers[id];
+      }
+    }
   } catch {
     // Backend down: keep the last markers, the status line shows the problem.
   }
 }
 
 loadSensors();
+setInterval(loadSensors, 10000);
