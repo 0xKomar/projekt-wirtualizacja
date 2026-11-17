@@ -39,6 +39,22 @@ h1 {
   filter: grayscale(1) brightness(1.08) contrast(0.85);
 }
 
+.legend {
+  background: white;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  line-height: 1.6;
+}
+
+.dot {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
 .ok {
   color: green;
 }

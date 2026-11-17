@@ -94,5 +94,20 @@ async function loadSensors() {
   }
 }
 
+// Legend in the corner, same colors as the markers.
+const legend = L.control({ position: "bottomright" });
+legend.onAdd = () => {
+  const div = L.DomUtil.create("div", "legend");
+  div.innerHTML = `
+    <strong>Noise level</strong><br>
+    <span class="dot" style="background: ${COLORS.quiet}"></span> below 55 dB<br>
+    <span class="dot" style="background: ${COLORS.medium}"></span> 55-70 dB<br>
+    <span class="dot" style="background: ${COLORS.loud}"></span> above 70 dB<br>
+    <span class="dot" style="background: ${COLORS.offline}"></span> offline or no data<br>
+    <small>Uncalibrated sensor values</small>`;
+  return div;
+};
+legend.addTo(map);
+
 loadSensors();
 setInterval(loadSensors, 10000);
