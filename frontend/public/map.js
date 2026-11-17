@@ -40,6 +40,21 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// Name, latest reading and when it was measured.
+function popupText(device) {
+  const reading = device.last_reading;
+  let text = `<strong>${escapeHtml(device.name)}</strong><br>`;
+  if (!reading) {
+    return text + "No readings yet";
+  }
+  text += `${reading.db_avg} dB (min ${reading.db_min}, max ${reading.db_max})<br>`;
+  text += new Date(reading.measured_at).toLocaleString();
+  if (!device.online) {
+    text += "<br>Offline";
+  }
+  return text;
+}
+
 function showSensor(device) {
   const position = [device.location.lat, device.location.lon];
   let marker = markers[device.id];
@@ -51,10 +66,12 @@ function showSensor(device) {
       fillOpacity: 0.9,
     }).addTo(map);
     marker.bindTooltip(escapeHtml(device.name));
+    marker.bindPopup("");
     markers[device.id] = marker;
   }
   marker.setLatLng(position);
   marker.setStyle({ fillColor: levelColor(device) });
+  marker.setPopupContent(popupText(device));
 }
 
 async function loadSensors() {
