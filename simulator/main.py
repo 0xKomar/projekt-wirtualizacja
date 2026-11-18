@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import signal
 import sys
@@ -76,8 +77,9 @@ def send_readings(devices, stopped):
 
 def main():
     # 0 would send readings in a loop without any pause.
-    if INTERVAL <= 0:
-        sys.exit(f"SIM_INTERVAL must be greater than 0, got {INTERVAL:g}")
+    # Written this way so nan and inf are rejected too.
+    if not 0 < INTERVAL < math.inf:
+        sys.exit(f"SIM_INTERVAL must be a number greater than 0, got {INTERVAL:g}")
     # Stop right away on "docker compose stop" (SIGTERM).
     signal.signal(signal.SIGTERM, lambda *args: sys.exit(0))
     devices = load_devices()
