@@ -25,7 +25,7 @@ The numbers are made up for testing. Like the sensor readings, they are uncalibr
 | Variable | Default | Purpose |
 |---|---|---|
 | `SIM_API_URL` | `http://localhost:8000` | backend address, compose sets it from `BACKEND_URL` |
-| `SIM_INTERVAL` | `10` | seconds between readings |
+| `SIM_INTERVAL` | `10` | seconds between readings, greater than 0 |
 | `SIM_STATE_FILE` | `devices.json` (`/data/devices.json` in the container) | where device ids and keys are kept |
 
 ## Run
