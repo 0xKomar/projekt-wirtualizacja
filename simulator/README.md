@@ -19,6 +19,7 @@ The numbers are made up for testing. Like the sensor readings, they are uncalibr
 - `noise.py` - the sensor list and the noise generator.
 - `main.py` - registers the sensors and sends the readings.
 - `test_noise.py` - tests for the generator.
+- `test_main.py` - tests for the `SIM_INTERVAL` check.
 
 ## Environment
 
