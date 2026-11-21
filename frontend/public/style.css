@@ -116,3 +116,43 @@ p {
   color: var(--loud);
   background: color-mix(in srgb, var(--loud) 14%, transparent);
 }
+
+/* Sensor marker: the value in a colored circle. */
+.pin {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  border: 3px solid var(--card);
+  border-radius: 50%;
+  background: var(--c);
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.sensor-popup .leaflet-popup-content-wrapper,
+.sensor-popup .leaflet-popup-tip {
+  background: var(--card);
+  color: var(--text);
+  border-radius: 12px;
+}
+
+.sensor-popup .leaflet-popup-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+}
+
+.value {
+  color: var(--c);
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.value small {
+  font-size: 0.8rem;
+}
