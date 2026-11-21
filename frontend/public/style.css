@@ -11,6 +11,15 @@
   --shadow: 0 2px 10px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
+/* Dark theme, switched by the button in the header (theme.js). */
+[data-theme="dark"] {
+  --bg: #15191e;
+  --card: #1d232a;
+  --text: #e6e8eb;
+  --muted: #8b949e;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+}
+
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
@@ -27,6 +36,21 @@ body {
 /* Gray map, so only the sensors are in color. */
 .gray-tiles {
   filter: grayscale(1) brightness(1.06) contrast(0.85);
+}
+
+/* Same map turned dark. */
+[data-theme="dark"] .gray-tiles {
+  filter: grayscale(1) invert(1) brightness(0.8) contrast(0.9);
+}
+
+[data-theme="dark"] .leaflet-bar a,
+[data-theme="dark"] .leaflet-control-attribution {
+  background: var(--card);
+  color: var(--text);
+}
+
+[data-theme="dark"] .leaflet-control-attribution a {
+  color: #7fb4ff;
 }
 
 .card {
@@ -219,4 +243,24 @@ h2 {
     width: auto;
     max-height: 30vh;
   }
+}
+
+/* Moon in light mode, sun in dark mode. */
+.theme {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.theme::before {
+  content: "\263E";
+}
+
+[data-theme="dark"] .theme::before {
+  content: "\2600";
 }

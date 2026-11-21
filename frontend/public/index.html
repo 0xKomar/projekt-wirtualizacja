@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
 </head>
 <body>
   <div id="map"></div>
@@ -18,6 +19,7 @@
       <p class="muted">Poznań, <span id="online">0/0</span> sensors online</p>
     </div>
     <span id="status" class="status">Checking...</span>
+    <button id="theme" class="theme" type="button" onclick="toggleTheme()" aria-label="Switch light or dark theme"></button>
   </header>
 
   <section class="card sensors">
