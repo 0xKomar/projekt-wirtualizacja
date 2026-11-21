@@ -1,5 +1,6 @@
 // Map of Poznań, centred on the old town.
-const map = L.map("map").setView([52.4064, 16.9252], 13);
+const map = L.map("map", { zoomControl: false }).setView([52.4064, 16.9252], 13);
+L.control.zoom({ position: "bottomright" }).addTo(map);
 
 // OpenStreetMap tiles, shown in gray so the colored sensors stand out.
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -11,26 +12,25 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 // One marker per device id, so a refresh can update it in place.
 const markers = {};
 
-const COLORS = {
-  quiet: "#2e9e44",
-  medium: "#f0b400",
-  loud: "#d7301f",
-  offline: "#9e9e9e",
-};
-
-// Color from the latest average: below 55 green, 55-70 yellow, above 70 red.
-function levelColor(device) {
+// Level from the latest average: below 55 quiet, 55-70 medium, above 70 loud.
+// The name is also the CSS class that gives the color.
+function noiseLevel(device) {
   if (!device.online || !device.last_reading) {
-    return COLORS.offline;
+    return "offline";
   }
-  const level = device.last_reading.db_avg;
-  if (level < 55) {
-    return COLORS.quiet;
+  const value = device.last_reading.db_avg;
+  if (value < 55) {
+    return "quiet";
   }
-  if (level <= 70) {
-    return COLORS.medium;
+  if (value <= 70) {
+    return "medium";
   }
-  return COLORS.loud;
+  return "loud";
+}
+
+// Rounded value for the marker and the list, "-" without readings.
+function shortValue(device) {
+  return device.last_reading ? Math.round(device.last_reading.db_avg) : "-";
 }
 
 // Names come from the API, so never put them into HTML as they are.
@@ -40,38 +40,79 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// "12 s ago" or "3 min ago".
+function timeAgo(isoTime) {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(isoTime)) / 1000));
+  if (seconds < 60) {
+    return `${seconds} s ago`;
+  }
+  return `${Math.round(seconds / 60)} min ago`;
+}
+
 // Name, latest reading and when it was measured.
 function popupText(device) {
   const reading = device.last_reading;
-  let text = `<strong>${escapeHtml(device.name)}</strong><br>`;
+  let text = `<strong>${escapeHtml(device.name)}</strong>`;
   if (!reading) {
-    return text + "No readings yet";
+    return text + '<span class="muted">No readings yet</span>';
   }
-  text += `${reading.db_avg} dB (min ${reading.db_min}, max ${reading.db_max})<br>`;
-  text += new Date(reading.measured_at).toLocaleString();
+  text += `<span class="value ${noiseLevel(device)}">${reading.db_avg.toFixed(1)} <small>dB</small></span>`;
+  text += `<span class="muted">min ${reading.db_min}, max ${reading.db_max}</span>`;
+  text += `<span class="muted">${timeAgo(reading.measured_at)}</span>`;
   if (!device.online) {
-    text += "<br>Offline";
+    text += '<span class="muted">Offline</span>';
   }
   return text;
+}
+
+// Round marker with the value inside, colored by level.
+function markerIcon(device) {
+  return L.divIcon({
+    className: "",
+    html: `<div class="pin ${noiseLevel(device)}">${shortValue(device)}</div>`,
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+  });
 }
 
 function showSensor(device) {
   const position = [device.location.lat, device.location.lon];
   let marker = markers[device.id];
   if (!marker) {
-    marker = L.circleMarker(position, {
-      radius: 10,
-      color: "white",
-      weight: 2,
-      fillOpacity: 0.9,
-    }).addTo(map);
+    marker = L.marker(position).addTo(map);
     marker.bindTooltip(escapeHtml(device.name));
-    marker.bindPopup("");
+    marker.bindPopup("", { className: "sensor-popup" });
     markers[device.id] = marker;
   }
   marker.setLatLng(position);
-  marker.setStyle({ fillColor: levelColor(device) });
+  marker.setIcon(markerIcon(device));
   marker.setPopupContent(popupText(device));
+}
+
+// List of sensors, loudest first. A click moves the map to the sensor.
+function showList(devices) {
+  const sorted = [...devices].sort((a, b) => (b.last_reading?.db_avg ?? -1) - (a.last_reading?.db_avg ?? -1));
+  const list = document.getElementById("sensor-list");
+  list.innerHTML = "";
+  for (const device of sorted) {
+    const reading = device.last_reading;
+    const row = document.createElement("button");
+    row.className = "sensor";
+    row.innerHTML = `
+      <span>${escapeHtml(device.name)}<small>${reading ? timeAgo(reading.measured_at) : "no data"}</small></span>
+      <span class="badge ${noiseLevel(device)}">${reading ? `${shortValue(device)} dB` : "-"}</span>`;
+    row.onclick = () => {
+      const marker = markers[device.id];
+      map.flyTo(marker.getLatLng(), 15);
+      marker.openPopup();
+    };
+    list.append(row);
+  }
+  if (devices.length === 0) {
+    list.innerHTML = '<p class="muted">No sensors yet</p>';
+  }
+  const online = devices.filter((device) => device.online).length;
+  document.getElementById("online").textContent = `${online}/${devices.length}`;
 }
 
 async function loadSensors() {
@@ -81,6 +122,7 @@ async function loadSensors() {
     for (const device of devices) {
       showSensor(device);
     }
+    showList(devices);
     // Remove markers of devices the backend no longer has.
     const ids = devices.map((device) => String(device.id));
     for (const id of Object.keys(markers)) {
@@ -90,24 +132,9 @@ async function loadSensors() {
       }
     }
   } catch {
-    // Backend down: keep the last markers, the status line shows the problem.
+    // Backend down: keep the last markers, the status badge shows the problem.
   }
 }
-
-// Legend in the corner, same colors as the markers.
-const legend = L.control({ position: "bottomright" });
-legend.onAdd = () => {
-  const div = L.DomUtil.create("div", "legend");
-  div.innerHTML = `
-    <strong>Noise level</strong><br>
-    <span class="dot" style="background: ${COLORS.quiet}"></span> below 55 dB<br>
-    <span class="dot" style="background: ${COLORS.medium}"></span> 55-70 dB<br>
-    <span class="dot" style="background: ${COLORS.loud}"></span> above 70 dB<br>
-    <span class="dot" style="background: ${COLORS.offline}"></span> offline or no data<br>
-    <small>Uncalibrated sensor values</small>`;
-  return div;
-};
-legend.addTo(map);
 
 loadSensors();
 setInterval(loadSensors, 10000);
