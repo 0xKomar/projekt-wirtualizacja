@@ -89,6 +89,32 @@ function showSensor(device) {
   marker.setPopupContent(popupText(device));
 }
 
+// List of sensors, loudest first. A click moves the map to the sensor.
+function showList(devices) {
+  const sorted = [...devices].sort((a, b) => (b.last_reading?.db_avg ?? -1) - (a.last_reading?.db_avg ?? -1));
+  const list = document.getElementById("sensor-list");
+  list.innerHTML = "";
+  for (const device of sorted) {
+    const reading = device.last_reading;
+    const row = document.createElement("button");
+    row.className = "sensor";
+    row.innerHTML = `
+      <span>${escapeHtml(device.name)}<small>${reading ? timeAgo(reading.measured_at) : "no data"}</small></span>
+      <span class="badge ${noiseLevel(device)}">${reading ? `${shortValue(device)} dB` : "-"}</span>`;
+    row.onclick = () => {
+      const marker = markers[device.id];
+      map.flyTo(marker.getLatLng(), 15);
+      marker.openPopup();
+    };
+    list.append(row);
+  }
+  if (devices.length === 0) {
+    list.innerHTML = '<p class="muted">No sensors yet</p>';
+  }
+  const online = devices.filter((device) => device.online).length;
+  document.getElementById("online").textContent = `${online}/${devices.length}`;
+}
+
 async function loadSensors() {
   try {
     const res = await fetch("/api/devices", { cache: "no-store", signal: AbortSignal.timeout(5000) });
@@ -96,6 +122,7 @@ async function loadSensors() {
     for (const device of devices) {
       showSensor(device);
     }
+    showList(devices);
     // Remove markers of devices the backend no longer has.
     const ids = devices.map((device) => String(device.id));
     for (const id of Object.keys(markers)) {

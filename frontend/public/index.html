@@ -15,10 +15,15 @@
   <header class="card">
     <div>
       <h1>Noise monitor</h1>
-      <p class="muted">Poznań</p>
+      <p class="muted">Poznań, <span id="online">0/0</span> sensors online</p>
     </div>
     <span id="status" class="status">Checking...</span>
   </header>
+
+  <section class="card sensors">
+    <h2>Sensors</h2>
+    <div id="sensor-list"><p class="muted">No sensors yet</p></div>
+  </section>
 
   <div class="card legend">
     <span class="badge quiet">&lt; 55 dB</span>

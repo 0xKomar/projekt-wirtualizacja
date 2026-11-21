@@ -156,3 +156,67 @@ p {
 .value small {
   font-size: 0.8rem;
 }
+
+/* Sensor list on the right, scrolls when there are many sensors. */
+.sensors {
+  top: 16px;
+  right: 16px;
+  width: 280px;
+  max-height: calc(100vh - 140px);
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
+
+h2 {
+  margin: 4px 12px 8px;
+  font-size: 1rem;
+}
+
+#sensor-list {
+  overflow-y: auto;
+}
+
+#sensor-list .muted {
+  padding: 0 12px 8px;
+}
+
+.sensor {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sensor:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.sensor small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+/* Phone: the list goes to the bottom, above the legend. */
+@media (max-width: 700px) {
+  .sensors {
+    top: auto;
+    bottom: 80px;
+    left: 16px;
+    width: auto;
+    max-height: 30vh;
+  }
+}
