@@ -80,6 +80,24 @@ Stop everything with `docker compose down`. The database stays in the `postgres_
 More details: [backend/README.md](backend/README.md), [frontend/README.md](frontend/README.md),
 [simulator/README.md](simulator/README.md).
 
+## Deploy on a server
+
+The same steps work on a server with Docker:
+
+```sh
+git clone https://github.com/0xKomar/projekt-wirtualizacja.git
+cd projekt-wirtualizacja
+cp .env.example .env    # strong POSTGRES_PASSWORD, FRONTEND_PORT = the public port
+docker compose up -d --build
+```
+
+- Open only `FRONTEND_PORT` in the firewall. The backend listens on localhost only and the database has no port,
+  so everything from outside goes through nginx and `/api/`.
+- A device sends its readings to `http://<server>:<FRONTEND_PORT>/api/readings` with its `X-Device-Key`.
+- `db`, `backend` and `frontend` come back on their own after a crash or a server reboot.
+- Update to the latest version: `git pull`, then `docker compose up -d --build`.
+- For demo data add `--profile sim` to the `up` command. The simulator is not restarted on its own.
+
 ## Team
 
 | Name | GitHub |

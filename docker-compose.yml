@@ -1,6 +1,8 @@
 services:
   db:
     image: postgres:17.11-bookworm
+    # Comes back after a crash or a server reboot, unless stopped by hand.
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
       POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
@@ -24,6 +26,7 @@ services:
     build:
       context: ./backend
       target: runtime
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
       POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
@@ -53,6 +56,7 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     environment:
       BACKEND_URL: ${BACKEND_URL:?Set BACKEND_URL in .env}
     ports:
@@ -67,6 +71,7 @@ services:
     build: ./simulator
     # Starts only with: docker compose --profile sim up
     profiles: ["sim"]
+    # No restart: on a 401 it stops on purpose instead of retrying with a bad key.
     environment:
       SIM_API_URL: ${BACKEND_URL:?Set BACKEND_URL in .env}
       SIM_INTERVAL: ${SIM_INTERVAL:-10}
