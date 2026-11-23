@@ -6,15 +6,15 @@ async function checkHealth() {
     // Give up after 5 s, so a dead backend shows up quickly.
     const res = await fetch("/api/health", { cache: "no-store", signal: AbortSignal.timeout(5000) });
     const data = await res.json();
-    status.textContent = `Backend: ${data.status}, database: ${data.database}`;
-    status.className = res.ok ? "ok" : "error";
+    status.textContent = res.ok ? "Live" : `Database: ${data.database}`;
+    status.className = res.ok ? "status ok" : "status error";
   } catch {
     // Timeout or no JSON at all: nginx couldn't reach the backend.
     status.textContent = "Backend unreachable";
-    status.className = "error";
+    status.className = "status error";
   }
 
-  document.getElementById("checked").textContent = `Last check: ${new Date().toLocaleTimeString()}`;
+  status.title = `Last check: ${new Date().toLocaleTimeString()}`;
 }
 
 checkHealth();
