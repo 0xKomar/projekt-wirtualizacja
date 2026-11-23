@@ -1,8 +1,6 @@
 import hashlib
-import hmac
 import secrets
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
@@ -11,11 +9,18 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import Engine
+from sqlalchemy import Engine, select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.config import ApiSettings, Settings
-from app.database import check_database, create_database_engine
+from app.database import (
+    DatabaseSession,
+    check_database,
+    create_database_engine,
+    create_schema,
+)
+from app.models import Device, Location, Reading
 
 
 class HealthResponse(BaseModel):
@@ -108,20 +113,11 @@ class ReadingCreate(BaseModel):
         return self
 
 
-@dataclass
-class StoredDevice:
-    id: int
-    name: str
-    location_id: int
-    key_hash: str
-    last_seen_at: datetime | None = None
-    last_reading: ReadingResponse | None = None
-
-
 def create_app(
     *, engine: Engine | None = None, api_settings: ApiSettings | None = None
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings()
+    initialize_schema = engine is None
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -129,13 +125,13 @@ def create_app(
             engine if engine is not None else create_database_engine(Settings())
         )
         try:
+            if initialize_schema:
+                create_schema(application.state.engine)
             yield
         finally:
             application.state.engine.dispose()
 
     application = FastAPI(title="IoT Noise Monitoring API", lifespan=lifespan)
-    application.state.locations = {}
-    application.state.devices = {}
     application.state.device_offline_after_seconds = (
         api_settings.device_offline_after_seconds
     )
@@ -197,34 +193,77 @@ def create_app(
         },
     )
     def create_location(
-        payload: LocationCreate, request: Request
+        payload: LocationCreate, session: DatabaseSession
     ) -> LocationResponse:
-        location_id = max(request.app.state.locations, default=0) + 1
-        location = LocationResponse(id=location_id, **payload.model_dump())
-        request.app.state.locations[location_id] = location
-        return location
+        location = Location(**payload.model_dump())
+        session.add(location)
+        session.flush()
+        return LocationResponse(
+            id=location.id,
+            name=location.name,
+            lat=location.lat,
+            lon=location.lon,
+        )
 
-    def device_response(request: Request, device: StoredDevice) -> DeviceResponse:
-        last_seen_at = device.last_seen_at
+    def as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def reading_response(reading: Reading) -> ReadingResponse:
+        measured_at = as_utc(reading.measured_at)
+        assert measured_at is not None
+        return ReadingResponse(
+            measured_at=measured_at,
+            db_avg=reading.db_avg,
+            db_min=reading.db_min,
+            db_max=reading.db_max,
+        )
+
+    def device_response(
+        session: Session, device: Device, offline_after_seconds: int
+    ) -> DeviceResponse:
+        last_seen_at = as_utc(device.last_seen_at)
         online = (
             last_seen_at is not None
             and (datetime.now(timezone.utc) - last_seen_at).total_seconds()
-            <= request.app.state.device_offline_after_seconds
+            <= offline_after_seconds
         )
+        last_reading = session.scalar(
+            select(Reading)
+            .where(Reading.device_id == device.id)
+            .order_by(Reading.received_at.desc(), Reading.id.desc())
+            .limit(1)
+        )
+        location = device.location
         return DeviceResponse(
             id=device.id,
             name=device.name,
-            location=request.app.state.locations[device.location_id],
+            location=LocationResponse(
+                id=location.id,
+                name=location.name,
+                lat=location.lat,
+                lon=location.lon,
+            ),
             online=online,
             last_seen_at=last_seen_at,
-            last_reading=device.last_reading,
+            last_reading=(
+                reading_response(last_reading) if last_reading is not None else None
+            ),
         )
 
     @application.get("/api/devices", response_model=list[DeviceResponse])
-    def list_devices(request: Request) -> list[DeviceResponse]:
+    def list_devices(
+        request: Request, session: DatabaseSession
+    ) -> list[DeviceResponse]:
+        devices = session.scalars(select(Device).order_by(Device.id)).all()
         return [
-            device_response(request, device)
-            for device in request.app.state.devices.values()
+            device_response(
+                session, device, request.app.state.device_offline_after_seconds
+            )
+            for device in devices
         ]
 
     @application.get(
@@ -236,12 +275,16 @@ def create_app(
         },
     )
     def get_device(
-        device_id: Annotated[int, Path(gt=0)], request: Request
+        device_id: Annotated[int, Path(gt=0)],
+        request: Request,
+        session: DatabaseSession,
     ) -> DeviceResponse:
-        device = request.app.state.devices.get(device_id)
+        device = session.get(Device, device_id)
         if device is None:
             raise HTTPException(status_code=404, detail="Device not found")
-        return device_response(request, device)
+        return device_response(
+            session, device, request.app.state.device_offline_after_seconds
+        )
 
     @application.post(
         "/api/devices",
@@ -252,21 +295,22 @@ def create_app(
             404: {"model": ErrorResponse, "description": "Location not found"},
         },
     )
-    def create_device(payload: DeviceCreate, request: Request) -> DeviceCreated:
-        if payload.location_id not in request.app.state.locations:
+    def create_device(
+        payload: DeviceCreate, session: DatabaseSession
+    ) -> DeviceCreated:
+        if session.get(Location, payload.location_id) is None:
             raise HTTPException(status_code=404, detail="Location not found")
-        device_id = max(request.app.state.devices, default=0) + 1
         key = secrets.token_urlsafe(32)
         key_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
-        device = StoredDevice(
-            id=device_id,
+        device = Device(
             name=payload.name,
             location_id=payload.location_id,
             key_hash=key_hash,
         )
-        request.app.state.devices[device_id] = device
+        session.add(device)
+        session.flush()
         return DeviceCreated(
-            id=device_id,
+            id=device.id,
             name=payload.name,
             location_id=payload.location_id,
             key=key,
@@ -284,6 +328,7 @@ def create_app(
     def create_reading(
         payload: ReadingCreate,
         request: Request,
+        session: DatabaseSession,
         device_key: str = Header(..., alias="X-Device-Key"),
     ) -> ReadingResponse:
         if not device_key:
@@ -291,13 +336,8 @@ def create_app(
                 status_code=401, detail="Invalid or missing device key"
             )
         candidate_hash = hashlib.sha256(device_key.encode("utf-8")).hexdigest()
-        device = next(
-            (
-                stored
-                for stored in request.app.state.devices.values()
-                if hmac.compare_digest(candidate_hash, stored.key_hash)
-            ),
-            None,
+        device = session.scalar(
+            select(Device).where(Device.key_hash == candidate_hash).limit(1)
         )
         if device is None:
             raise HTTPException(
@@ -309,15 +349,18 @@ def create_app(
         if measured_at > received_at + timedelta(minutes=5):
             raise HTTPException(status_code=400, detail="Invalid request data")
 
-        reading = ReadingResponse(
+        reading = Reading(
+            device_id=device.id,
             measured_at=measured_at,
+            received_at=received_at,
             db_avg=payload.db_avg,
             db_min=payload.db_min,
             db_max=payload.db_max,
         )
         device.last_seen_at = received_at
-        device.last_reading = reading
-        return reading
+        session.add(reading)
+        session.flush()
+        return reading_response(reading)
 
     def custom_openapi() -> dict[str, Any]:
         if application.openapi_schema:

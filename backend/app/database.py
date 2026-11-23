@@ -1,6 +1,15 @@
+from collections.abc import Iterator
+from typing import Annotated, TypeAlias
+
+from fastapi import Depends, Request
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.orm import DeclarativeBase, Session
 
 from app.config import Settings
+
+
+class Base(DeclarativeBase):
+    pass
 
 
 def create_database_engine(settings: Settings) -> Engine:
@@ -15,6 +24,23 @@ def create_database_engine(settings: Settings) -> Engine:
     )
 
 
+def create_schema(engine: Engine) -> None:
+    Base.metadata.create_all(engine)
+
+
 def check_database(engine: Engine) -> None:
     with engine.connect() as connection:
         connection.execute(text("SELECT 1")).scalar_one()
+
+
+def get_session(request: Request) -> Iterator[Session]:
+    with Session(request.app.state.engine) as session:
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+
+
+DatabaseSession: TypeAlias = Annotated[Session, Depends(get_session)]

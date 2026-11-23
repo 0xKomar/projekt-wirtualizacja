@@ -3,8 +3,11 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from app.main import create_app
+from app.models import Device, Reading
 
 
 def create_device(client: TestClient) -> dict[str, Any]:
@@ -195,9 +198,13 @@ def test_device_offline_threshold_is_configurable(engine, monkeypatch):
             headers={"X-Device-Key": device["key"]},
         )
         assert response.status_code == 201
-        app.state.devices[1].last_seen_at = datetime.now(timezone.utc) - timedelta(
-            seconds=75
-        )
+        with Session(engine) as session:
+            stored_device = session.get(Device, device["id"])
+            assert stored_device is not None
+            stored_device.last_seen_at = datetime.now(timezone.utc) - timedelta(
+                seconds=75
+            )
+            session.commit()
         device_response = client.get("/api/devices/1")
 
     assert device_response.json()["online"] is True
@@ -266,9 +273,12 @@ def test_non_finite_reading_is_rejected_without_mutating_device(
             headers={"X-Device-Key": device["key"]},
         )
         assert valid.status_code == 201
-        stored = app.state.devices[1]
-        last_seen_before = stored.last_seen_at
-        last_reading_before = stored.last_reading
+        before_response = client.get("/api/devices/1")
+        assert before_response.status_code == 200
+        with Session(engine) as session:
+            reading_count_before = session.scalar(
+                select(func.count()).select_from(Reading)
+            )
         payload = {"db_avg": "54", "db_min": "48", "db_max": "72"}
         payload[field] = value
         raw_body = (
@@ -284,8 +294,14 @@ def test_non_finite_reading_is_rejected_without_mutating_device(
                 "X-Device-Key": device["key"],
             },
         )
+        after_response = client.get("/api/devices/1")
+        with Session(engine) as session:
+            reading_count_after = session.scalar(
+                select(func.count()).select_from(Reading)
+            )
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Invalid request data"}
-    assert stored.last_seen_at == last_seen_before
-    assert stored.last_reading == last_reading_before
+    assert after_response.json()["last_seen_at"] == before_response.json()["last_seen_at"]
+    assert after_response.json()["last_reading"] == before_response.json()["last_reading"]
+    assert reading_count_after == reading_count_before

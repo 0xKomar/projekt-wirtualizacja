@@ -55,15 +55,17 @@ responses have `Cache-Control: no-store`.
 | `503` | `{"status": "error", "database": "unreachable"}` |
 
 A database connection or query failure returns 503 without exposing connection
-details. The application creates its connection pool without connecting during
-startup; Compose waits for a healthy database before starting the backend.
+details. At startup, the backend creates any missing model tables after Compose has waited
+for the database healthcheck. Health requests then verify connectivity with a real
+`SELECT 1` query.
 
-## Device API contract (B1.1)
+## Device API contract (B1.2)
 
-The B1.1 endpoints provide the agreed request/response contract using temporary
-in-memory state. Locations, devices, keys and readings are lost when the backend
-restarts; this stage does not persist them in PostgreSQL. B1.2 will replace the
-stub storage with database-backed models.
+Locations, devices, key hashes and readings are stored in PostgreSQL through
+SQLAlchemy models. The backend creates missing tables on startup; managed schema
+migrations are planned for B2.2. Device keys are returned only at registration
+and only their SHA-256 hashes are stored. B1.3 will add the remaining location and
+device CRUD operations plus filtered reading history.
 
 ### Locations and devices
 
@@ -84,9 +86,8 @@ returns `201` with `id`, `name`, `location_id` and a cryptographically random
 {"id": 1, "name": "Stary Rynek", "location_id": 1, "key": "<returned-once>"}
 ```
 
-The key is returned only in this creation response; the stub keeps only its
-SHA-256 hash in process memory. `location_id` must refer to a location created in
-the current process.
+The key is returned only in this creation response; PostgreSQL stores only its
+SHA-256 hash. `location_id` must refer to an existing location.
 
 ### Readings
 
