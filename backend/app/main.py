@@ -1,21 +1,35 @@
 import hashlib
-import hmac
 import secrets
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException, Path, Request, Response
+from fastapi import (
+    FastAPI,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import Engine, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.config import ApiSettings, Settings
-from app.database import check_database, create_database_engine
+from app.database import (
+    DatabaseSession,
+    check_database,
+    create_database_engine,
+    create_schema,
+)
+from app.models import Device, Location, Reading
 
 
 class HealthResponse(BaseModel):
@@ -41,6 +55,10 @@ class LocationCreate(BaseModel):
         return value
 
 
+class LocationUpdate(LocationCreate):
+    pass
+
+
 class LocationResponse(BaseModel):
     id: int
     name: str
@@ -59,6 +77,10 @@ class DeviceCreate(BaseModel):
         if not value:
             raise ValueError("name must not be blank")
         return value
+
+
+class DeviceUpdate(DeviceCreate):
+    pass
 
 
 class DeviceCreated(BaseModel):
@@ -108,20 +130,11 @@ class ReadingCreate(BaseModel):
         return self
 
 
-@dataclass
-class StoredDevice:
-    id: int
-    name: str
-    location_id: int
-    key_hash: str
-    last_seen_at: datetime | None = None
-    last_reading: ReadingResponse | None = None
-
-
 def create_app(
     *, engine: Engine | None = None, api_settings: ApiSettings | None = None
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings()
+    initialize_schema = engine is None
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -129,13 +142,13 @@ def create_app(
             engine if engine is not None else create_database_engine(Settings())
         )
         try:
+            if initialize_schema:
+                create_schema(application.state.engine)
             yield
         finally:
             application.state.engine.dispose()
 
     application = FastAPI(title="IoT Noise Monitoring API", lifespan=lifespan)
-    application.state.locations = {}
-    application.state.devices = {}
     application.state.device_offline_after_seconds = (
         api_settings.device_offline_after_seconds
     )
@@ -197,34 +210,167 @@ def create_app(
         },
     )
     def create_location(
-        payload: LocationCreate, request: Request
+        payload: LocationCreate, session: DatabaseSession
     ) -> LocationResponse:
-        location_id = max(request.app.state.locations, default=0) + 1
-        location = LocationResponse(id=location_id, **payload.model_dump())
-        request.app.state.locations[location_id] = location
-        return location
+        location = Location(**payload.model_dump())
+        session.add(location)
+        session.flush()
+        return LocationResponse(
+            id=location.id,
+            name=location.name,
+            lat=location.lat,
+            lon=location.lon,
+        )
 
-    def device_response(request: Request, device: StoredDevice) -> DeviceResponse:
-        last_seen_at = device.last_seen_at
+    @application.get("/api/locations", response_model=list[LocationResponse])
+    def list_locations(session: DatabaseSession) -> list[LocationResponse]:
+        locations = session.scalars(select(Location).order_by(Location.id)).all()
+        return [
+            LocationResponse(
+                id=location.id,
+                name=location.name,
+                lat=location.lat,
+                lon=location.lon,
+            )
+            for location in locations
+        ]
+
+    @application.get(
+        "/api/locations/{location_id}",
+        response_model=LocationResponse,
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Location not found"},
+        },
+    )
+    def get_location(
+        location_id: Annotated[int, Path(gt=0)], session: DatabaseSession
+    ) -> LocationResponse:
+        location = session.get(Location, location_id)
+        if location is None:
+            raise HTTPException(status_code=404, detail="Location not found")
+        return LocationResponse(
+            id=location.id,
+            name=location.name,
+            lat=location.lat,
+            lon=location.lon,
+        )
+
+    @application.put(
+        "/api/locations/{location_id}",
+        response_model=LocationResponse,
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Location not found"},
+        },
+    )
+    def update_location(
+        location_id: Annotated[int, Path(gt=0)],
+        payload: LocationUpdate,
+        session: DatabaseSession,
+    ) -> LocationResponse:
+        location = session.get(Location, location_id)
+        if location is None:
+            raise HTTPException(status_code=404, detail="Location not found")
+        for field, value in payload.model_dump().items():
+            setattr(location, field, value)
+        session.flush()
+        return LocationResponse(
+            id=location.id,
+            name=location.name,
+            lat=location.lat,
+            lon=location.lon,
+        )
+
+    @application.delete(
+        "/api/locations/{location_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Location not found"},
+            409: {"model": ErrorResponse, "description": "Location has devices"},
+        },
+    )
+    def delete_location(
+        location_id: Annotated[int, Path(gt=0)], session: DatabaseSession
+    ) -> Response:
+        location = session.get(Location, location_id)
+        if location is None:
+            raise HTTPException(status_code=404, detail="Location not found")
+        has_devices = session.scalar(
+            select(Device.id).where(Device.location_id == location_id).limit(1)
+        )
+        if has_devices is not None:
+            raise HTTPException(status_code=409, detail="Location has devices")
+        try:
+            session.delete(location)
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(
+                status_code=409, detail="Location has devices"
+            ) from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    def as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def reading_response(reading: Reading) -> ReadingResponse:
+        measured_at = as_utc(reading.measured_at)
+        assert measured_at is not None
+        return ReadingResponse(
+            measured_at=measured_at,
+            db_avg=reading.db_avg,
+            db_min=reading.db_min,
+            db_max=reading.db_max,
+        )
+
+    def device_response(
+        session: Session, device: Device, offline_after_seconds: int
+    ) -> DeviceResponse:
+        last_seen_at = as_utc(device.last_seen_at)
         online = (
             last_seen_at is not None
             and (datetime.now(timezone.utc) - last_seen_at).total_seconds()
-            <= request.app.state.device_offline_after_seconds
+            <= offline_after_seconds
         )
+        last_reading = session.scalar(
+            select(Reading)
+            .where(Reading.device_id == device.id)
+            .order_by(Reading.received_at.desc(), Reading.id.desc())
+            .limit(1)
+        )
+        location = device.location
         return DeviceResponse(
             id=device.id,
             name=device.name,
-            location=request.app.state.locations[device.location_id],
+            location=LocationResponse(
+                id=location.id,
+                name=location.name,
+                lat=location.lat,
+                lon=location.lon,
+            ),
             online=online,
             last_seen_at=last_seen_at,
-            last_reading=device.last_reading,
+            last_reading=(
+                reading_response(last_reading) if last_reading is not None else None
+            ),
         )
 
     @application.get("/api/devices", response_model=list[DeviceResponse])
-    def list_devices(request: Request) -> list[DeviceResponse]:
+    def list_devices(
+        request: Request, session: DatabaseSession
+    ) -> list[DeviceResponse]:
+        devices = session.scalars(select(Device).order_by(Device.id)).all()
         return [
-            device_response(request, device)
-            for device in request.app.state.devices.values()
+            device_response(
+                session, device, request.app.state.device_offline_after_seconds
+            )
+            for device in devices
         ]
 
     @application.get(
@@ -236,12 +382,73 @@ def create_app(
         },
     )
     def get_device(
-        device_id: Annotated[int, Path(gt=0)], request: Request
+        device_id: Annotated[int, Path(gt=0)],
+        request: Request,
+        session: DatabaseSession,
     ) -> DeviceResponse:
-        device = request.app.state.devices.get(device_id)
+        device = session.get(Device, device_id)
         if device is None:
             raise HTTPException(status_code=404, detail="Device not found")
-        return device_response(request, device)
+        return device_response(
+            session, device, request.app.state.device_offline_after_seconds
+        )
+
+    @application.put(
+        "/api/devices/{device_id}",
+        response_model=DeviceResponse,
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Device or location not found"},
+        },
+    )
+    def update_device(
+        device_id: Annotated[int, Path(gt=0)],
+        payload: DeviceUpdate,
+        request: Request,
+        session: DatabaseSession,
+    ) -> DeviceResponse:
+        device = session.get(Device, device_id)
+        if device is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+        location = session.get(Location, payload.location_id)
+        if location is None:
+            raise HTTPException(status_code=404, detail="Location not found")
+        device.name = payload.name
+        device.location = location
+        session.flush()
+        return device_response(
+            session, device, request.app.state.device_offline_after_seconds
+        )
+
+    @application.delete(
+        "/api/devices/{device_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Device not found"},
+            409: {"model": ErrorResponse, "description": "Device has readings"},
+        },
+    )
+    def delete_device(
+        device_id: Annotated[int, Path(gt=0)], session: DatabaseSession
+    ) -> Response:
+        device = session.get(Device, device_id)
+        if device is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+        has_readings = session.scalar(
+            select(Reading.id).where(Reading.device_id == device_id).limit(1)
+        )
+        if has_readings is not None:
+            raise HTTPException(status_code=409, detail="Device has readings")
+        try:
+            session.delete(device)
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(
+                status_code=409, detail="Device has readings"
+            ) from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @application.post(
         "/api/devices",
@@ -252,25 +459,74 @@ def create_app(
             404: {"model": ErrorResponse, "description": "Location not found"},
         },
     )
-    def create_device(payload: DeviceCreate, request: Request) -> DeviceCreated:
-        if payload.location_id not in request.app.state.locations:
+    def create_device(
+        payload: DeviceCreate, session: DatabaseSession
+    ) -> DeviceCreated:
+        if session.get(Location, payload.location_id) is None:
             raise HTTPException(status_code=404, detail="Location not found")
-        device_id = max(request.app.state.devices, default=0) + 1
         key = secrets.token_urlsafe(32)
         key_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
-        device = StoredDevice(
-            id=device_id,
+        device = Device(
             name=payload.name,
             location_id=payload.location_id,
             key_hash=key_hash,
         )
-        request.app.state.devices[device_id] = device
+        session.add(device)
+        session.flush()
         return DeviceCreated(
-            id=device_id,
+            id=device.id,
             name=payload.name,
             location_id=payload.location_id,
             key=key,
         )
+
+    @application.get(
+        "/api/devices/{device_id}/readings",
+        response_model=list[ReadingResponse],
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Device not found"},
+        },
+    )
+    def list_device_readings(
+        device_id: Annotated[int, Path(gt=0)],
+        session: DatabaseSession,
+        from_time: datetime | None = Query(
+            default=None,
+            alias="from",
+            description="Inclusive ISO 8601 timestamp with a UTC offset.",
+        ),
+        to_time: datetime | None = Query(
+            default=None,
+            alias="to",
+            description="Inclusive ISO 8601 timestamp with a UTC offset.",
+        ),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[ReadingResponse]:
+        if session.get(Device, device_id) is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+        if any(
+            value is not None and (value.tzinfo is None or value.utcoffset() is None)
+            for value in (from_time, to_time)
+        ):
+            raise HTTPException(status_code=400, detail="Invalid request data")
+
+        start = as_utc(from_time)
+        end = as_utc(to_time)
+        if start is not None and end is not None and start > end:
+            raise HTTPException(status_code=400, detail="Invalid request data")
+
+        statement = select(Reading).where(Reading.device_id == device_id)
+        if start is not None:
+            statement = statement.where(Reading.measured_at >= start)
+        if end is not None:
+            statement = statement.where(Reading.measured_at <= end)
+        readings = session.scalars(
+            statement.order_by(Reading.measured_at.desc(), Reading.id.desc()).limit(
+                limit
+            )
+        ).all()
+        return [reading_response(reading) for reading in readings]
 
     @application.post(
         "/api/readings",
@@ -284,6 +540,7 @@ def create_app(
     def create_reading(
         payload: ReadingCreate,
         request: Request,
+        session: DatabaseSession,
         device_key: str = Header(..., alias="X-Device-Key"),
     ) -> ReadingResponse:
         if not device_key:
@@ -291,13 +548,8 @@ def create_app(
                 status_code=401, detail="Invalid or missing device key"
             )
         candidate_hash = hashlib.sha256(device_key.encode("utf-8")).hexdigest()
-        device = next(
-            (
-                stored
-                for stored in request.app.state.devices.values()
-                if hmac.compare_digest(candidate_hash, stored.key_hash)
-            ),
-            None,
+        device = session.scalar(
+            select(Device).where(Device.key_hash == candidate_hash).limit(1)
         )
         if device is None:
             raise HTTPException(
@@ -309,15 +561,18 @@ def create_app(
         if measured_at > received_at + timedelta(minutes=5):
             raise HTTPException(status_code=400, detail="Invalid request data")
 
-        reading = ReadingResponse(
+        reading = Reading(
+            device_id=device.id,
             measured_at=measured_at,
+            received_at=received_at,
             db_avg=payload.db_avg,
             db_min=payload.db_min,
             db_max=payload.db_max,
         )
         device.last_seen_at = received_at
-        device.last_reading = reading
-        return reading
+        session.add(reading)
+        session.flush()
+        return reading_response(reading)
 
     def custom_openapi() -> dict[str, Any]:
         if application.openapi_schema:

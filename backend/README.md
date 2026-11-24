@@ -55,15 +55,18 @@ responses have `Cache-Control: no-store`.
 | `503` | `{"status": "error", "database": "unreachable"}` |
 
 A database connection or query failure returns 503 without exposing connection
-details. The application creates its connection pool without connecting during
-startup; Compose waits for a healthy database before starting the backend.
+details. At startup, the backend creates any missing model tables after Compose has waited
+for the database healthcheck. Health requests then verify connectivity with a real
+`SELECT 1` query.
 
-## Device API contract (B1.1)
+## Device API contract (B1.2)
 
-The B1.1 endpoints provide the agreed request/response contract using temporary
-in-memory state. Locations, devices, keys and readings are lost when the backend
-restarts; this stage does not persist them in PostgreSQL. B1.2 will replace the
-stub storage with database-backed models.
+Locations, devices, key hashes and readings are stored in PostgreSQL through
+SQLAlchemy models. The backend creates missing tables on startup; managed schema
+migrations are planned for B2.2. Device keys are returned only at registration
+and only their SHA-256 hashes are stored. B1.3 CRUD and filtered reading history
+are implemented on this branch; deleting a resource with dependents returns 409
+instead of deleting its associated records.
 
 ### Locations and devices
 
@@ -84,9 +87,18 @@ returns `201` with `id`, `name`, `location_id` and a cryptographically random
 {"id": 1, "name": "Stary Rynek", "location_id": 1, "key": "<returned-once>"}
 ```
 
-The key is returned only in this creation response; the stub keeps only its
-SHA-256 hash in process memory. `location_id` must refer to a location created in
-the current process.
+The key is returned only in this creation response; PostgreSQL stores only its
+SHA-256 hash. `location_id` must refer to an existing location.
+
+`GET /api/locations` lists locations, and `GET /api/locations/{id}` returns one
+or 404. `PUT /api/locations/{id}` replaces its name and coordinates.
+`DELETE /api/locations/{id}` returns 204 when unused, or 409 while devices
+reference it.
+
+`PUT /api/devices/{id}` replaces the device name and location using the same
+fields as device creation. It does not rotate the key, and the key is not returned
+again. `DELETE /api/devices/{id}` returns 204 only when unused; otherwise it
+returns 409 to preserve measurement history.
 
 ### Readings
 
@@ -125,6 +137,15 @@ Before the first reading, `online` is false and `last_seen_at` and
 `measured_at`. `DEVICE_OFFLINE_AFTER_SECONDS` controls the online threshold; its
 initial value is 60 seconds for testing only and will be reviewed after ESP
 trials.
+
+### Reading history (B1.3)
+
+`GET /api/devices/{id}/readings?from=...&to=...&limit=...` returns a device's
+readings ordered by `measured_at` descending, with newer inserted rows first when
+timestamps match. The optional `from` and `to` filters are inclusive ISO 8601
+timestamps and must include a UTC offset; they are normalized to UTC. `limit`
+defaults to 100 and must be between 1 and 1000. A missing device returns 404;
+invalid filters return 400.
 
 Invalid request data returns `400 {"detail":"Invalid request data"}`. Missing or
 invalid device keys return `401 {"detail":"Invalid or missing device key"}`;
