@@ -64,8 +64,9 @@ for the database healthcheck. Health requests then verify connectivity with a re
 Locations, devices, key hashes and readings are stored in PostgreSQL through
 SQLAlchemy models. The backend creates missing tables on startup; managed schema
 migrations are planned for B2.2. Device keys are returned only at registration
-and only their SHA-256 hashes are stored. B1.3 is in progress: filtered reading
-history is implemented on this branch; location and device CRUD remain to be added.
+and only their SHA-256 hashes are stored. B1.3 CRUD and filtered reading history
+are implemented on this branch; deleting a resource with dependents returns 409
+instead of deleting its associated records.
 
 ### Locations and devices
 
@@ -88,6 +89,16 @@ returns `201` with `id`, `name`, `location_id` and a cryptographically random
 
 The key is returned only in this creation response; PostgreSQL stores only its
 SHA-256 hash. `location_id` must refer to an existing location.
+
+`GET /api/locations` lists locations, and `GET /api/locations/{id}` returns one
+or 404. `PUT /api/locations/{id}` replaces its name and coordinates.
+`DELETE /api/locations/{id}` returns 204 when unused, or 409 while devices
+reference it.
+
+`PUT /api/devices/{id}` replaces the device name and location using the same
+fields as device creation. It does not rotate the key, and the key is not returned
+again. `DELETE /api/devices/{id}` returns 204 only when unused; otherwise it
+returns 409 to preserve measurement history.
 
 ### Readings
 
