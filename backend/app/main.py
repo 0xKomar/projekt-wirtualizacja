@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException, Path, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
@@ -315,6 +315,54 @@ def create_app(
             location_id=payload.location_id,
             key=key,
         )
+
+    @application.get(
+        "/api/devices/{device_id}/readings",
+        response_model=list[ReadingResponse],
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Device not found"},
+        },
+    )
+    def list_device_readings(
+        device_id: Annotated[int, Path(gt=0)],
+        session: DatabaseSession,
+        from_time: datetime | None = Query(
+            default=None,
+            alias="from",
+            description="Inclusive ISO 8601 timestamp with a UTC offset.",
+        ),
+        to_time: datetime | None = Query(
+            default=None,
+            alias="to",
+            description="Inclusive ISO 8601 timestamp with a UTC offset.",
+        ),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[ReadingResponse]:
+        if session.get(Device, device_id) is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+        if any(
+            value is not None and (value.tzinfo is None or value.utcoffset() is None)
+            for value in (from_time, to_time)
+        ):
+            raise HTTPException(status_code=400, detail="Invalid request data")
+
+        start = as_utc(from_time)
+        end = as_utc(to_time)
+        if start is not None and end is not None and start > end:
+            raise HTTPException(status_code=400, detail="Invalid request data")
+
+        statement = select(Reading).where(Reading.device_id == device_id)
+        if start is not None:
+            statement = statement.where(Reading.measured_at >= start)
+        if end is not None:
+            statement = statement.where(Reading.measured_at <= end)
+        readings = session.scalars(
+            statement.order_by(Reading.measured_at.desc(), Reading.id.desc()).limit(
+                limit
+            )
+        ).all()
+        return [reading_response(reading) for reading in readings]
 
     @application.post(
         "/api/readings",

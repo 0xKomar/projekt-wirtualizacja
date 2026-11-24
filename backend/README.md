@@ -64,8 +64,8 @@ for the database healthcheck. Health requests then verify connectivity with a re
 Locations, devices, key hashes and readings are stored in PostgreSQL through
 SQLAlchemy models. The backend creates missing tables on startup; managed schema
 migrations are planned for B2.2. Device keys are returned only at registration
-and only their SHA-256 hashes are stored. B1.3 will add the remaining location and
-device CRUD operations plus filtered reading history.
+and only their SHA-256 hashes are stored. B1.3 is in progress: filtered reading
+history is implemented on this branch; location and device CRUD remain to be added.
 
 ### Locations and devices
 
@@ -126,6 +126,15 @@ Before the first reading, `online` is false and `last_seen_at` and
 `measured_at`. `DEVICE_OFFLINE_AFTER_SECONDS` controls the online threshold; its
 initial value is 60 seconds for testing only and will be reviewed after ESP
 trials.
+
+### Reading history (B1.3)
+
+`GET /api/devices/{id}/readings?from=...&to=...&limit=...` returns a device's
+readings ordered by `measured_at` descending, with newer inserted rows first when
+timestamps match. The optional `from` and `to` filters are inclusive ISO 8601
+timestamps and must include a UTC offset; they are normalized to UTC. `limit`
+defaults to 100 and must be between 1 and 1000. A missing device returns 404;
+invalid filters return 400.
 
 Invalid request data returns `400 {"detail":"Invalid request data"}`. Missing or
 invalid device keys return `401 {"detail":"Invalid or missing device key"}`;
