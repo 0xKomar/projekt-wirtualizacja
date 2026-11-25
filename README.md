@@ -43,6 +43,7 @@ backend/     REST API (container)
 frontend/    web app with the map (container, nginx)
 firmware/    ESP32 sensor code
 simulator/   virtual sensors for testing and demos
+demo/        curl walkthrough of the API
 ```
 
 ## How to run
@@ -97,6 +98,22 @@ docker compose up -d --build
 - `db`, `backend` and `frontend` come back on their own after a crash or a server reboot.
 - Update to the latest version: `git pull`, then `docker compose up -d --build`.
 - For demo data add `--profile sim` to the `up` command. The simulator is not restarted on its own.
+
+## API demo
+
+`demo/api.sh` walks through every endpoint with curl: health check, locations and devices
+(add, list, change, delete), sending a reading and its history, and the errors for a wrong key (401),
+bad data (400), an unknown device (404) and deleting something still in use (409).
+Each step prints the command, the HTTP code and the answer.
+
+```sh
+demo/api.sh                                   # local stack, http://localhost:8080
+demo/api.sh http://<server>:<FRONTEND_PORT>   # deployed app
+```
+
+It needs only bash and curl and ends with an error when a code differs from the expected one,
+so it also works as a quick check after a deploy. The demo location and device it adds stay in the database
+and show up on the map.
 
 ## Team
 
