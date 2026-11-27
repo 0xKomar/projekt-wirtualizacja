@@ -1,6 +1,8 @@
+import asyncio
 import hashlib
+import logging
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
@@ -23,13 +25,22 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import ApiSettings, Settings
+from app.events import (
+    add_online_transition,
+    add_threshold_events,
+    locked_alert_rule_query,
+    locked_device_query,
+    scan_offline_devices,
+)
 from app.database import (
     DatabaseSession,
     check_database,
     create_database_engine,
     create_schema,
 )
-from app.models import Device, Location, Reading
+from app.models import AlertRule, Device, Event, Location, Reading
+
+logger = logging.getLogger(__name__)
 
 
 class HealthResponse(BaseModel):
@@ -130,6 +141,90 @@ class ReadingCreate(BaseModel):
         return self
 
 
+class AlertRuleCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    device_id: int | None = Field(default=None, gt=0)
+    threshold_db: float = Field(ge=0, le=150)
+    min_duration_seconds: int = Field(ge=1, le=86400)
+    enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("name must not be blank")
+        return value
+
+
+class AlertRuleUpdate(AlertRuleCreate):
+    pass
+
+
+class AlertRuleResponse(BaseModel):
+    id: int
+    name: str
+    device_id: int | None
+    threshold_db: float
+    min_duration_seconds: int
+    enabled: bool
+
+
+class EventResponse(BaseModel):
+    id: int
+    device_id: int
+    alert_rule_id: int | None
+    type: str
+    started_at: datetime
+    description: str
+    acknowledged: bool
+
+
+class EventAcknowledgementUpdate(BaseModel):
+    acknowledged: bool
+
+
+def alert_rule_response(rule: AlertRule) -> AlertRuleResponse:
+    return AlertRuleResponse(
+        id=rule.id,
+        name=rule.name,
+        device_id=rule.device_id,
+        threshold_db=rule.threshold_db,
+        min_duration_seconds=rule.min_duration_seconds,
+        enabled=rule.enabled,
+    )
+
+
+def event_response(event: Event) -> EventResponse:
+    started_at = event.started_at
+    if started_at.tzinfo is None or started_at.utcoffset() is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    else:
+        started_at = started_at.astimezone(timezone.utc)
+    return EventResponse(
+        id=event.id,
+        device_id=event.device_id,
+        alert_rule_id=event.alert_rule_id,
+        type=event.type,
+        started_at=started_at,
+        description=event.description,
+        acknowledged=event.acknowledged,
+    )
+
+
+async def monitor_offline_events(application: FastAPI) -> None:
+    while True:
+        await asyncio.sleep(application.state.event_scan_interval_seconds)
+        try:
+            await asyncio.to_thread(
+                scan_offline_devices,
+                application.state.engine,
+                application.state.device_offline_after_seconds,
+            )
+        except SQLAlchemyError:
+            logger.exception("Offline event scan failed; the next scan will retry")
+
+
 def create_app(
     *, engine: Engine | None = None, api_settings: ApiSettings | None = None
 ) -> FastAPI:
@@ -141,16 +236,25 @@ def create_app(
         application.state.engine = (
             engine if engine is not None else create_database_engine(Settings())
         )
+        monitor_task: asyncio.Task[None] | None = None
         try:
             if initialize_schema:
                 create_schema(application.state.engine)
+            monitor_task = asyncio.create_task(monitor_offline_events(application))
             yield
         finally:
+            if monitor_task is not None:
+                monitor_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await monitor_task
             application.state.engine.dispose()
 
     application = FastAPI(title="IoT Noise Monitoring API", lifespan=lifespan)
     application.state.device_offline_after_seconds = (
         api_settings.device_offline_after_seconds
+    )
+    application.state.event_scan_interval_seconds = (
+        api_settings.event_scan_interval_seconds
     )
 
     @application.exception_handler(RequestValidationError)
@@ -426,7 +530,7 @@ def create_app(
         responses={
             400: {"model": ErrorResponse, "description": "Invalid request data"},
             404: {"model": ErrorResponse, "description": "Device not found"},
-            409: {"model": ErrorResponse, "description": "Device has readings"},
+            409: {"model": ErrorResponse, "description": "Device has dependent records"},
         },
     )
     def delete_device(
@@ -438,15 +542,21 @@ def create_app(
         has_readings = session.scalar(
             select(Reading.id).where(Reading.device_id == device_id).limit(1)
         )
-        if has_readings is not None:
-            raise HTTPException(status_code=409, detail="Device has readings")
+        has_alert_rules = session.scalar(
+            select(AlertRule.id).where(AlertRule.device_id == device_id).limit(1)
+        )
+        has_events = session.scalar(
+            select(Event.id).where(Event.device_id == device_id).limit(1)
+        )
+        if has_readings is not None or has_alert_rules is not None or has_events is not None:
+            raise HTTPException(status_code=409, detail="Device has dependent records")
         try:
             session.delete(device)
             session.flush()
         except IntegrityError:
             session.rollback()
             raise HTTPException(
-                status_code=409, detail="Device has readings"
+                status_code=409, detail="Device has dependent records"
             ) from None
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -549,7 +659,7 @@ def create_app(
             )
         candidate_hash = hashlib.sha256(device_key.encode("utf-8")).hexdigest()
         device = session.scalar(
-            select(Device).where(Device.key_hash == candidate_hash).limit(1)
+            locked_device_query(Device.key_hash == candidate_hash).limit(1)
         )
         if device is None:
             raise HTTPException(
@@ -569,10 +679,166 @@ def create_app(
             db_min=payload.db_min,
             db_max=payload.db_max,
         )
+        add_online_transition(session, device.id, received_at)
         device.last_seen_at = received_at
         session.add(reading)
         session.flush()
+        add_threshold_events(
+            session,
+            device.id,
+            reading,
+            request.app.state.device_offline_after_seconds,
+        )
+        session.flush()
         return reading_response(reading)
+
+    @application.get(
+        "/api/alert-rules",
+        response_model=list[AlertRuleResponse],
+    )
+    def list_alert_rules(session: DatabaseSession) -> list[AlertRuleResponse]:
+        rules = session.scalars(select(AlertRule).order_by(AlertRule.id)).all()
+        return [alert_rule_response(rule) for rule in rules]
+
+    @application.post(
+        "/api/alert-rules",
+        status_code=201,
+        response_model=AlertRuleResponse,
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Device not found"},
+        },
+    )
+    def create_alert_rule(
+        payload: AlertRuleCreate, session: DatabaseSession
+    ) -> AlertRuleResponse:
+        if payload.device_id is not None and session.get(Device, payload.device_id) is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+        rule = AlertRule(**payload.model_dump())
+        session.add(rule)
+        session.flush()
+        return alert_rule_response(rule)
+
+    @application.put(
+        "/api/alert-rules/{rule_id}",
+        response_model=AlertRuleResponse,
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Rule or device not found"},
+        },
+    )
+    def update_alert_rule(
+        rule_id: Annotated[int, Path(gt=0)],
+        payload: AlertRuleUpdate,
+        session: DatabaseSession,
+    ) -> AlertRuleResponse:
+        rule = session.scalar(locked_alert_rule_query(AlertRule.id == rule_id))
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Alert rule not found")
+        if payload.device_id is not None and session.get(Device, payload.device_id) is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+        for field, value in payload.model_dump().items():
+            setattr(rule, field, value)
+        session.flush()
+        return alert_rule_response(rule)
+
+    @application.delete(
+        "/api/alert-rules/{rule_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Alert rule not found"},
+            409: {"model": ErrorResponse, "description": "Rule has events"},
+        },
+    )
+    def delete_alert_rule(
+        rule_id: Annotated[int, Path(gt=0)], session: DatabaseSession
+    ) -> Response:
+        rule = session.scalar(locked_alert_rule_query(AlertRule.id == rule_id))
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Alert rule not found")
+        has_events = session.scalar(
+            select(Event.id).where(Event.alert_rule_id == rule_id).limit(1)
+        )
+        if has_events is not None:
+            raise HTTPException(status_code=409, detail="Alert rule has events")
+        try:
+            session.delete(rule)
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(status_code=409, detail="Alert rule has events") from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @application.get(
+        "/api/events",
+        response_model=list[EventResponse],
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Device not found"},
+        },
+    )
+    def list_events(
+        session: DatabaseSession,
+        device_id: int | None = Query(default=None, gt=0),
+        event_type: str | None = Query(
+            default=None,
+            alias="type",
+            pattern="^(noise_threshold|device_offline|device_online)$",
+        ),
+        from_time: datetime | None = Query(
+            default=None, alias="from", description="Inclusive ISO 8601 time with offset."
+        ),
+        to_time: datetime | None = Query(
+            default=None, alias="to", description="Inclusive ISO 8601 time with offset."
+        ),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[EventResponse]:
+        if device_id is not None and session.get(Device, device_id) is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+        if any(
+            value is not None and (value.tzinfo is None or value.utcoffset() is None)
+            for value in (from_time, to_time)
+        ):
+            raise HTTPException(status_code=400, detail="Invalid request data")
+        start = as_utc(from_time)
+        end = as_utc(to_time)
+        if start is not None and end is not None and start > end:
+            raise HTTPException(status_code=400, detail="Invalid request data")
+
+        statement = select(Event)
+        if device_id is not None:
+            statement = statement.where(Event.device_id == device_id)
+        if event_type is not None:
+            statement = statement.where(Event.type == event_type)
+        if start is not None:
+            statement = statement.where(Event.started_at >= start)
+        if end is not None:
+            statement = statement.where(Event.started_at <= end)
+        events = session.scalars(
+            statement.order_by(Event.started_at.desc(), Event.id.desc()).limit(limit)
+        ).all()
+        return [event_response(event) for event in events]
+
+    @application.patch(
+        "/api/events/{event_id}",
+        response_model=EventResponse,
+        responses={
+            400: {"model": ErrorResponse, "description": "Invalid request data"},
+            404: {"model": ErrorResponse, "description": "Event not found"},
+        },
+    )
+    def update_event_acknowledgement(
+        event_id: Annotated[int, Path(gt=0)],
+        payload: EventAcknowledgementUpdate,
+        session: DatabaseSession,
+    ) -> EventResponse:
+        event = session.get(Event, event_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail="Event not found")
+        event.acknowledged = payload.acknowledged
+        session.flush()
+        return event_response(event)
 
     def custom_openapi() -> dict[str, Any]:
         if application.openapi_schema:

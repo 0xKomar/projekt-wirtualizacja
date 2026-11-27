@@ -24,3 +24,4 @@ class Settings(BaseSettings):
 
 class ApiSettings(BaseSettings):
     device_offline_after_seconds: int = Field(default=60, gt=0)
+    event_scan_interval_seconds: int = Field(default=5, gt=0, le=300)
