@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Three bars like a noise meter, in the map's level colors. -->
+  <rect x="3" y="18" width="7" height="11" rx="2" fill="#1f9d55"/>
+  <rect x="12.5" y="11" width="7" height="18" rx="2" fill="#e0a100"/>
+  <rect x="22" y="3" width="7" height="26" rx="2" fill="#d6402b"/>
+</svg>

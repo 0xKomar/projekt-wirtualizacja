@@ -23,6 +23,7 @@ The values are uncalibrated sensor readings, not dB SPL.
   - `app.js` - backend and database status, checked every 10 seconds.
   - `map.js` - the map, the markers and the sensor list.
   - `style.css` - layout and colors for both themes.
+  - `favicon.svg` - tab icon, three bars in the noise level colors.
 - `nginx/default.conf.template` - serves the page and forwards `/api/` to the backend.
   The official nginx image fills in `${BACKEND_URL}` when the container starts.
 
