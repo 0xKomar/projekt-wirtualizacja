@@ -37,7 +37,8 @@ The application does not load a local `.env` file itself.
 | `DB_HOST` | Database hostname inside Compose; normally `db` |
 | `DB_PORT` | PostgreSQL listening port; normally `5432` |
 | `BACKEND_PORT` | API listening and loopback host port; normally `8000` |
-| `DEVICE_OFFLINE_AFTER_SECONDS` | Provisional offline threshold; defaults to `60` seconds until ESP trials |
+| `DEVICE_OFFLINE_AFTER_SECONDS` | Provisional offline threshold for initial demo checks; defaults to `60` seconds |
+| `EVENT_SCAN_INTERVAL_SECONDS` | Background offline-event scan interval; defaults to `5` seconds |
 
 If `BACKEND_PORT` changes, update the port in `BACKEND_URL` for the frontend too.
 Database connection and statement timeouts are three seconds. The connection
@@ -146,6 +147,36 @@ timestamps match. The optional `from` and `to` filters are inclusive ISO 8601
 timestamps and must include a UTC offset; they are normalized to UTC. `limit`
 defaults to 100 and must be between 1 and 1000. A missing device returns 404;
 invalid filters return 400.
+
+## Alert rules and events (B1.5)
+
+`/api/alert-rules` supports `GET`, `POST`, `PUT /{id}`, and `DELETE /{id}`. A
+rule accepts `name`, optional `device_id` (null applies to all devices),
+`threshold_db` (0–150), `min_duration_seconds` (1–86400), and `enabled`.
+Deleting a rule that has generated events returns 409 so event history is kept.
+
+`GET /api/events` supports `device_id`, `type`, inclusive offset-aware `from`
+and `to`, and `limit` (default 100, maximum 1000). Event types are
+`noise_threshold`, `device_offline`, and `device_online`. `PATCH
+/api/events/{id}` accepts `{"acknowledged": true}`. Invalid filters or bodies
+return 400; missing resources return 404.
+
+Noise events are created after successive above-threshold `db_avg` readings
+cover the configured minimum duration without a gap longer than the provisional
+offline threshold. Threshold events are append-only records of alerts emitted
+using readings available at evaluation time. A later-arriving reading with an
+earlier `measured_at` is stored in history but does not revise or retract an
+existing event; the event history is not a recomputed final chronology. A
+background task emits one offline event per outage; the next reading emits the
+matching online transition. Device deletion returns 409 when readings, rules, or
+events depend on that device.
+
+All readings in this project are uncalibrated. A threshold value is an
+application rule in that uncalibrated scale, not a health or regulatory limit.
+The ESP32 firmware sends synthetic readings from the board itself. The example
+70-unit / 10-second alert rule is a demo trigger only—not a health, workplace, or
+regulatory threshold. Project readings are uncalibrated and are not dB SPL or
+dBA. See `../firmware/README.md` for the measurement and threshold rationale.
 
 Invalid request data returns `400 {"detail":"Invalid request data"}`. Missing or
 invalid device keys return `401 {"detail":"Invalid or missing device key"}`;

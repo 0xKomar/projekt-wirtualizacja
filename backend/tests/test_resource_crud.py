@@ -175,7 +175,7 @@ def test_device_with_readings_cannot_be_deleted(engine):
 
     assert reading.status_code == 201
     assert response.status_code == 409
-    assert response.json() == {"detail": "Device has readings"}
+    assert response.json() == {"detail": "Device has dependent records"}
     assert len(retained_history.json()) == 1
 
 
@@ -351,6 +351,6 @@ def test_delete_integrity_races_return_409_and_preserve_resources(engine):
     assert location_delete.status_code == 409
     assert location_delete.json() == {"detail": "Location has devices"}
     assert device_delete.status_code == 409
-    assert device_delete.json() == {"detail": "Device has readings"}
+    assert device_delete.json() == {"detail": "Device has dependent records"}
     assert retained_location.status_code == 200
     assert retained_device.status_code == 200
